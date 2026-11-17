@@ -1,0 +1,17 @@
+[package]
+name = "predator-rgb"
+version = "0.1.0"
+edition = "2024"
+description = "Settings window and boot helper for the facer Acer Predator RGB keyboard driver"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/iamalisson/acer-predator-turbo-and-rgb-keyboard-linux-module"
+publish = false
+
+[dependencies]
+eframe = "0.37.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[profile.release]
+strip = true
+lto = "thin"

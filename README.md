@@ -74,11 +74,20 @@ Ubuntu (or other Debian based distros):
 Arch (I don't use arch anymore btw):  
 `sudo pacman -S linux-headers`
 
+For the settings app you also need Rust (`sudo pacman -S rust`, or [rustup](https://rustup.rs)).
 
+## Quick start: driver + settings app (works after reboot)
+```bash
+git clone https://github.com/iamalisson/acer-predator-turbo-and-rgb-keyboard-linux-module
+cd acer-predator-turbo-and-rgb-keyboard-linux-module
+sudo ./install_service.sh   # builds the driver and loads it on every boot
+./app/install.sh            # settings app; run as your normal user, it asks for sudo itself
+```
+Then open **Predator RGB** from your app menu. See [Settings app](#settings-app-predator-rgb) below.
 
 ## Install one time (Module won't work after reboot)
 ```bash
-git clone https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module
+git clone https://github.com/iamalisson/acer-predator-turbo-and-rgb-keyboard-linux-module
 cd "acer-predator-turbo-and-rgb-keyboard-linux-module"
 chmod +x ./*.sh
 sudo ./install.sh
@@ -96,7 +105,7 @@ sudo pacman -U Predator-Sense-CLI-{version}-any.pkg.tar.zst
 
 ## Install as a systemd service (Will work after reboot)
 ```bash
-git clone https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module
+git clone https://github.com/iamalisson/acer-predator-turbo-and-rgb-keyboard-linux-module
 cd "acer-predator-turbo-and-rgb-keyboard-linux-module"
 chmod +x ./*.sh
 sudo ./install_service.sh
@@ -104,7 +113,7 @@ sudo ./install_service.sh
 
 ## Install as an openrc service (Will work after reboot)
 ```bash
-git clone https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module
+git clone https://github.com/iamalisson/acer-predator-turbo-and-rgb-keyboard-linux-module
 cd "acer-predator-turbo-and-rgb-keyboard-linux-module"
 chmod +x ./*.sh
 sudo ./install_openrc.sh
@@ -114,6 +123,25 @@ sudo ./install_openrc.sh
 Turbo mode should work fine by using the turbo button on the keyboard.
 
 For RGB, the module will mount a new character device at `/dev/acer-gkbbl-0` to communicate with kernel space. 
+
+### Settings app (Predator RGB)
+![Predator RGB settings app](app/docs/screenshot.png)
+
+A small native app (Rust, in [`app/`](app)) to set the keyboard without the command line:
+
+- All effects: Static (one color per zone), Breath, Neon, Wave, Shifting, Zoom
+- Color, speed, direction and brightness, with a live preview of the keyboard
+- **Restore these settings after reboot** toggle
+- Changes apply instantly and are saved to `~/.config/predator-rgb/config.json`
+
+Install it after the driver service (see [Quick start](#quick-start-driver--settings-app-works-after-reboot)):
+```bash
+./app/install.sh          # install or update
+./app/install.sh remove   # uninstall (keeps your settings)
+```
+It installs `/usr/local/bin/predator-rgb`, an app-menu entry, and a `predator-rgb` systemd service that re-applies your settings at boot, after the driver has loaded. The app itself runs as your normal user, no sudo needed.
+
+### Command line
 
 You can use the `keyboard.py`, which is a simple script that provides an easy-to-understand CLI for setting your keyboard RGB. To run the script, just use the following command 
 
@@ -239,9 +267,13 @@ Load the previously saved profile:
 If installation failed, check this [issue](https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module/issues/4#issuecomment-905486393)
 If something didn't look right, do a reboot (or boot to windows) and play a little with some Predator Sense app to reset ACPI registers. 
 
+- **Build fails on an LTS kernel** with `conflicting types for 'platform_profile_register'`: older versions of `install.sh` built with `LTS=1` whenever the kernel name contained `lts`, which breaks modern LTS kernels (e.g. 6.18). This fork no longer sets it. Pull the latest version and run `sudo ./install_service.sh` again.
+- **Keyboard lights turn off after ~30 seconds without typing**: that is a firmware power-saving timeout, not the driver. Reboot into the BIOS (F2) and set **Main → Keyboard Lighting Timeout** to **Disabled**. If the option is missing, update the BIOS from Acer's support site.
+
 ## Uninstall:
 Simply run `./uninstall.sh` and (hopefully) everything should be back to normal.  
-If you have installed it as a service, simply run `./uninstall_service.sh`
+If you have installed it as a service, simply run `./uninstall_service.sh`  
+To remove the settings app, run `./app/install.sh remove`.
 
 ## Uninstall FOR Arch Linux Only
 

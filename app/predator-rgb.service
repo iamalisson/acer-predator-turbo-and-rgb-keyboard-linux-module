@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore Predator keyboard RGB settings
+After=turbo-fan.service
+Requires=turbo-fan.service
+
+[Service]
+Type=oneshot
+# turbo-fan is Type=simple and may rebuild the module after a kernel update, so wait up to 60s for the device
+ExecStartPre=/bin/sh -c 'for i in $$(seq 300); do [ -e /dev/acer-gkbbl-0 ] && exit 0; sleep 0.2; done; exit 1'
+# @CONFIG@ is replaced by install.sh with the installing user's config path
+ExecStart=/usr/local/bin/predator-rgb boot "@CONFIG@"
+
+[Install]
+WantedBy=multi-user.target

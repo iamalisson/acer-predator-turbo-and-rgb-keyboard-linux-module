@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Predator RGB
+Comment=Keyboard backlight color and effects
+Exec=/usr/local/bin/predator-rgb
+Icon=input-keyboard
+Categories=Settings;HardwareSettings;
