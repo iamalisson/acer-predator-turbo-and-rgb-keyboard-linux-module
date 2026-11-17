@@ -12,7 +12,7 @@ fi
 
 if [ ! "$(uname -r | grep lts)" == "" ]; then
     echo LTS kernel detected
-    MAKEFLAGS="LTS=1"
+    # MAKEFLAGS="LTS=1"  # disabled: LTS=1 stubs out platform_profile, which breaks builds on modern LTS kernels (6.18)
 fi
 
 # Remove previous chr devices if any exists

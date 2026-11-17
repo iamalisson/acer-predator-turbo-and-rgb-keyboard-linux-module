@@ -379,6 +379,7 @@ static u8 commun_fn_key_number;
 static u8 macro_key_state = 0;
 static bool cycle_gaming_thermal_profile = true;
 static bool predator_v4;
+static bool rgb_ec_enable;
 
 module_param(mailled, int, 0444);
 module_param(brightness, int, 0444);
@@ -388,6 +389,7 @@ module_param(force_caps, int, 0444);
 module_param(ec_raw_mode, bool, 0444);
 module_param(cycle_gaming_thermal_profile, bool, 0644);
 module_param(predator_v4, bool, 0444);
+module_param(rgb_ec_enable, bool, 0444);
 MODULE_PARM_DESC(mailled, "Set initial state of Mail LED");
 MODULE_PARM_DESC(brightness, "Set initial LCD backlight brightness");
 MODULE_PARM_DESC(threeg, "Set initial state of 3G hardware");
@@ -398,6 +400,8 @@ MODULE_PARM_DESC(cycle_gaming_thermal_profile,
 	"Set thermal mode key in cycle mode. Disabling it sets the mode key in turbo toggle mode");
 MODULE_PARM_DESC(predator_v4,
 	"Enable features for predator laptops that use predator sense v4");
+MODULE_PARM_DESC(rgb_ec_enable,
+	"Set the EC PredatorSense flag so the keyboard renders RGB (try it if only brightness reacts)");
 
 #ifdef lts
 int platform_profile_remove()
@@ -478,6 +482,14 @@ struct quirk_entry {
 	u8 cpu_fans;
 	u8 gpu_fans;
 	u8 predator_v4;
+	/*
+	 * PredatorSense "operating mode" models (OperationModeSupport in their
+	 * Feature.ini): the turbo key switches the WMI platform profile to Turbo
+	 * and sets the fans to max, instead of sending the legacy OC commands.
+	 * Requires predator_v4.
+	 */
+	u8 operating_mode;
+	u8 rgb_ec_enable;
 };
 
 static struct quirk_entry *quirks;
@@ -578,12 +590,30 @@ static struct quirk_entry quirk_acer_predator_ph315_54 = {
 	.turbo = 1,
 	.cpu_fans = 1,
 	.gpu_fans = 1,
+	/*
+	 * This model answers the Predator Sense v4 fan speed queries, but the
+	 * quirk did not enable the capability. Setting it here gets
+	 * ACER_CAP_FAN_SPEED_READ (and ACER_CAP_PLATFORM_PROFILE) alongside
+	 * turbo, whereas the predator_v4=1 module parameter replaces the whole
+	 * quirk and so trades turbo away for the readings.
+	 */
+	.predator_v4 = 1,
 };
 
 static struct quirk_entry quirk_acer_predator_ph315_55 = {
 	.turbo = 1,
 	.cpu_fans = 1,
 	.gpu_fans = 1,
+#if RTLNX_VER_MIN(6, 14, 0)
+	/*
+	 * PredatorSense drives this model through operating modes (Quiet,
+	 * Normal, Extreme, Turbo). Its BIOS ignores the legacy GPU/CPU OC misc
+	 * settings (indexes 5 and 7 are empty in WMBH), so turbo has to go
+	 * through the platform profile, as on Windows.
+	 */
+	.predator_v4 = 1,
+	.operating_mode = 1,
+#endif
 };
 
 static struct quirk_entry quirk_acer_predator_ph317_53 = {
@@ -626,6 +656,9 @@ static struct quirk_entry quirk_acer_predator_ph717_72 = {
 	.cpu_fans = 1,
 	.gpu_fans = 1,
 };
+static struct quirk_entry quirk_acer_predator_pt314_51s = {
+	.rgb_ec_enable = 1,
+};
 static struct quirk_entry quirk_acer_predator_pt314_52s = {
 	.turbo = 1,
 	.cpu_fans = 1,
@@ -660,6 +693,11 @@ static struct quirk_entry quirk_acer_predator_pt515_52 = {
 	.turbo = 1,
 	.cpu_fans = 1,
 	.gpu_fans = 2,
+};
+static struct quirk_entry quirk_acer_predator_pt516_51s = {
+    .turbo = 1,
+    .cpu_fans = 1,
+    .gpu_fans = 2,
 };
 static struct quirk_entry quirk_acer_predator_pt516_52s = {
 	.turbo = 1,
@@ -1022,6 +1060,15 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
 	},
 	{
 		.callback = dmi_matched,
+		.ident = "Acer Predator PT314-51s",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Predator PT314-51s"),
+		},
+		.driver_data = &quirk_acer_predator_pt314_51s,
+	},
+	{
+		.callback = dmi_matched,
 		.ident = "Acer Predator PT314-52S",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
@@ -1065,6 +1112,15 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
         },
         .driver_data = &quirk_acer_predator_pt316_51s,
 	},
+	{
+        .callback = dmi_matched,
+        .ident = "Acer Predator PT516-51s",
+        .matches = {
+            DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+            DMI_MATCH(DMI_PRODUCT_NAME, "Predator PT516-51s"),
+        },
+        .driver_data = &quirk_acer_predator_pt516_51s,
+    },
 	{
 		.callback = dmi_matched,
 		.ident = "Acer Predator PT515-52",
@@ -1262,6 +1318,27 @@ static int last_non_turbo_profile;
 /* The most performant supported profile */
 static int acer_predator_v4_max_perf;
 
+#if RTLNX_VER_MIN(6, 14, 0)
+/*
+ * Profile values of the WMI misc setting 0x0B, as read back by
+ * GetGamingMiscSetting and as reported in the supported profiles bitmap
+ * (misc setting 0x0A). These are also the operating modes of PredatorSense.
+ */
+enum acer_predator_v4_thermal_profile {
+	ACER_PREDATOR_V4_THERMAL_PROFILE_QUIET = 0x00,
+	ACER_PREDATOR_V4_THERMAL_PROFILE_BALANCED = 0x01,
+	ACER_PREDATOR_V4_THERMAL_PROFILE_PERFORMANCE = 0x04,
+	ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO = 0x05,
+	ACER_PREDATOR_V4_THERMAL_PROFILE_ECO = 0x06,
+};
+
+/*
+ * SetGamingFanGroupBehavior values sent by PredatorSense when its turbo key
+ * switches an operating mode model in and out of Turbo.
+ */
+#define ACER_OPMODE_FAN_BEHAVIOR_AUTO	0x155001F
+#define ACER_OPMODE_FAN_BEHAVIOR_MAX	0x2AA001F
+#else
 enum acer_predator_v4_thermal_profile_ec {
 	ACER_PREDATOR_V4_THERMAL_PROFILE_ECO = 0x04,
 	ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO = 0x03,
@@ -1269,6 +1346,7 @@ enum acer_predator_v4_thermal_profile_ec {
 	ACER_PREDATOR_V4_THERMAL_PROFILE_QUIET = 0x01,
 	ACER_PREDATOR_V4_THERMAL_PROFILE_BALANCED = 0x00,
 };
+#endif
 
 enum acer_predator_v4_thermal_profile_wmi {
 	ACER_PREDATOR_V4_THERMAL_PROFILE_ECO_WMI = 0x060B,
@@ -2542,6 +2620,31 @@ static int __init gaming_kbbl_poll_and_enable_zones(void)
 	return 0;
 }
 
+/*
+ * Some models (e.g. Predator PT314-51s) accept and store the RGB settings sent
+ * through WMI, but their EC keeps showing the default keyboard colour - only
+ * the brightness reacts - until the "PredatorSense is running" flag is set:
+ * EC register 0x03 bit 4, named PSEE in the DSDT. PredatorSense sets it on
+ * Windows; the ACPI tables declare the field but never write it.
+ */
+#define ACER_EC_APP_FLAGS		0x03
+#define ACER_EC_APP_FLAGS_PSENSE	BIT(4)
+
+static int acer_ec_enable_predator_sense(void)
+{
+	u8 flags;
+	int err;
+
+	err = ec_read(ACER_EC_APP_FLAGS, &flags);
+	if (err)
+		return err;
+
+	if (flags & ACER_EC_APP_FLAGS_PSENSE)
+		return 0;
+
+	return ec_write(ACER_EC_APP_FLAGS, flags | ACER_EC_APP_FLAGS_PSENSE);
+}
+
 static void __exit gaming_kbbl_static_cdev_exit(void)
 {
 	device_destroy(gkbbl_static_dev_class, gkbbl_static_dev);
@@ -2685,8 +2788,20 @@ static int acer_get_fan_speed(int fan)
 /*
  *  Predator series turbo button
  */
+#if RTLNX_VER_MIN(6, 14, 0)
+static int acer_predator_v4_toggle_turbo(void);
+#endif
+
 static void acer_toggle_turbo(void)
 {
+#if RTLNX_VER_MIN(6, 14, 0)
+	if (quirks->operating_mode) {
+		if (acer_predator_v4_toggle_turbo())
+			pr_warn("Failed to toggle the turbo operating mode\n");
+		return;
+	}
+#endif
+
 	if (turbo_state) {
 		turbo_state = 0;
 		/* Turn off turbo led */
@@ -2760,6 +2875,72 @@ acer_predator_v4_platform_profile_get(struct platform_profile_handler *pprof,
 }
 
 #if RTLNX_VER_MIN(6, 14, 0)
+/*
+ * Switch the WMI platform profile. On operating mode models this also does
+ * what PredatorSense does around Turbo: fans to max (and the turbo LED on)
+ * when entering it, fans back to auto when leaving it.
+ */
+static int acer_predator_v4_set_profile(u8 tp)
+{
+	u8 current_tp = tp;
+	int err;
+
+	/* If the current profile cannot be read, assume we may be leaving
+	 * Turbo so that the fans are not left at max.
+	 */
+	if (quirks->operating_mode &&
+	    WMID_gaming_get_misc_setting(ACER_WMID_MISC_SETTING_PLATFORM_PROFILE,
+					 &current_tp))
+		current_tp = ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO;
+
+	err = WMID_gaming_set_misc_setting(ACER_WMID_MISC_SETTING_PLATFORM_PROFILE, tp);
+	if (err)
+		return err;
+
+	if (quirks->operating_mode) {
+		bool turbo = tp == ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO;
+
+		if (turbo || current_tp == ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO) {
+			WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_FAN_BEHAVIOR,
+					       turbo ? ACER_OPMODE_FAN_BEHAVIOR_MAX :
+						       ACER_OPMODE_FAN_BEHAVIOR_AUTO,
+					       NULL);
+			WMID_gaming_set_u64(turbo ? 0x10001 : 0x1, ACER_CAP_TURBO_LED);
+		}
+	}
+
+	if (tp != acer_predator_v4_max_perf)
+		last_non_turbo_profile = tp;
+
+	return 0;
+}
+
+/* Toggle between the most performant profile and the last other one */
+static int acer_predator_v4_toggle_turbo(void)
+{
+	u8 current_tp;
+	int err, tp;
+
+	err = WMID_gaming_get_misc_setting(ACER_WMID_MISC_SETTING_PLATFORM_PROFILE,
+					   &current_tp);
+	if (err)
+		return err;
+
+	if (current_tp == acer_predator_v4_max_perf) {
+		tp = last_non_turbo_profile;
+	} else {
+		last_non_turbo_profile = current_tp;
+		tp = acer_predator_v4_max_perf;
+	}
+
+	err = acer_predator_v4_set_profile(tp);
+	if (err)
+		return err;
+
+	platform_profile_notify(platform_profile_device);
+	return 0;
+}
+
 static int
 acer_predator_v4_platform_profile_set(struct device *dev,
 				      enum platform_profile_option profile)
@@ -2792,7 +2973,7 @@ acer_predator_v4_platform_profile_set(struct platform_profile_handler *pprof,
 	}
 
 	#if RTLNX_VER_MIN(6, 14, 0)
-	err = WMID_gaming_set_misc_setting(ACER_WMID_MISC_SETTING_PLATFORM_PROFILE, tp);
+	err = acer_predator_v4_set_profile(tp);
 	if (err)
 		return err;
 	#else
@@ -2802,10 +2983,10 @@ acer_predator_v4_platform_profile_set(struct platform_profile_handler *pprof,
 
 	if (ACPI_FAILURE(status))
 		return -EIO;
-	#endif
 
 	if (tp != acer_predator_v4_max_perf)
 		last_non_turbo_profile = tp;
+	#endif
 
 	return 0;
 }
@@ -2814,7 +2995,7 @@ acer_predator_v4_platform_profile_set(struct platform_profile_handler *pprof,
 static int
 acer_predator_v4_platform_profile_probe(void *drvdata, unsigned long *choices)
 {
-	unsigned long supported_profiles;
+	unsigned long supported_profiles = 0;
 	int err;
 
 	err = WMID_gaming_get_misc_setting(ACER_WMID_MISC_SETTING_SUPPORTED_PROFILES,
@@ -2881,11 +3062,11 @@ static int acer_platform_profile_setup(struct platform_device *device)
 		if (IS_ERR(platform_profile_device))
 			return PTR_ERR(platform_profile_device);
 
+		/*
+		 * The probe callback, run during registration, has already set
+		 * the default non-turbo profile from the supported profiles.
+		 */
 		platform_profile_support = true;
-
-		/* Set default non-turbo profile  */
-		last_non_turbo_profile =
-			ACER_PREDATOR_V4_THERMAL_PROFILE_BALANCED_WMI;
 	}
 	return 0;
 }
@@ -2926,6 +3107,24 @@ static int acer_platform_profile_setup(void)
 }
 #endif
 
+#if RTLNX_VER_MIN(6, 14, 0)
+static int acer_thermal_profile_change(void)
+{
+	/*
+	 * This mode key either cycles through the supported profiles or
+	 * toggles the most performant one. The current profile is read back
+	 * through WMI: the EC offset used by older kernels does not hold it on
+	 * every model (on the PH315-55 the operating mode lives at 0x2C).
+	 */
+	if (!quirks->predator_v4)
+		return 0;
+
+	if (cycle_gaming_thermal_profile)
+		return platform_profile_cycle();
+
+	return acer_predator_v4_toggle_turbo();
+}
+#else
 static int acer_thermal_profile_change(void)
 {
 	/*
@@ -3005,15 +3204,12 @@ static int acer_thermal_profile_change(void)
 		if (tp != ACER_PREDATOR_V4_THERMAL_PROFILE_TURBO_WMI)
 			last_non_turbo_profile = tp;
 
-		#if RTLNX_VER_MIN(6, 14, 0)
-		platform_profile_notify(platform_profile_device);
-		#else
 		platform_profile_notify();
-		#endif
 	}
 
 	return 0;
 }
+#endif
 
 /*
  * Switch series keyboard dock status
@@ -3677,6 +3873,10 @@ static int acer_resume(struct device *dev)
 	if (acer_wmi_accel_dev)
 		acer_gsensor_init();
 
+	/* Re-assert the flag in case the EC dropped it during sleep */
+	if ((quirks->rgb_ec_enable || rgb_ec_enable) && wmi_has_guid(WMID_GUID4))
+		acer_ec_enable_predator_sense();
+
 	return 0;
 }
 #else
@@ -3883,6 +4083,9 @@ static int __init acer_wmi_init(void)
 			gaming_kbbl_cdev_init();
 			gaming_kbbl_static_cdev_init();
 			gaming_kbbl_poll_and_enable_zones();
+			if ((quirks->rgb_ec_enable || rgb_ec_enable) &&
+			    acer_ec_enable_predator_sense())
+				pr_warn("Cannot set the EC PredatorSense flag, keyboard RGB may be ignored\n");
 		}
 	}
 
